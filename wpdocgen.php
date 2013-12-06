@@ -27,12 +27,16 @@
 
 /**
  * TODO:
- * 1. Display File page information now that it is getting there.
- * 2. Analyze and send Javascript files.
- * 3. Make Table of Contents better.
- * 4. Try to speed up the content loading. (maybe respond via html and json?)
- * 5. Create breadcrumbs.
- * 6. Create section specific pages?
+ *
+ * 1. Look deeper directories 
+ * 2. Make Table of Contents better.
+ * 3. Remove header on non-toc pages
+ * 4. Create breadcrumbs.
+ * 5. Eliminate empty sections.
+ * 6. Make sure we're loading long descriptions.
+ * 7. Fix admin page.
+ * 8. Remove newlines from descriptions when saving them.
+ * 
  */
 
 // Globals
@@ -158,7 +162,7 @@ function wpdocgen_analyze_php($file) {
 	// Analyze file meta
 	$docblock = array();
 	$i = 1;
-	$docblock["description"] = wpdocgen_get_description($header[0]);
+	$docblock["description"] = wpdocgen_analyze_description($header[0]);
 	preg_match_all("/ @[a-z]* .*/", $header[0], $meta);
 	foreach ($meta[0] as $data) {
 		$docblock[$i] = wpdocgen_analyze_file_header($data);
@@ -188,7 +192,7 @@ function wpdocgen_analyze_php($file) {
 		$name = $number ." - ". $basename;
 		$docblock = array();
 		$z = 1;
-		$docblock["description"] = wpdocgen_get_description($comment);
+		$docblock["description"] = wpdocgen_analyze_description($comment);
 		preg_match_all("/ @[a-z]* .*/", $comment, $meta);
 		foreach ($meta[0] as $data) {
 			$docblock[$z] = wpdocgen_analyze_docblock($data);
@@ -217,6 +221,79 @@ function wpdocgen_analyze_php($file) {
 	
 }
 
+function wpdocgen_analyze_js($file) {
+	global $wpdb;
+	global $wpdocgen_files;
+	global $wpdocgen_sections;
+	global $wpdocgen_section_meta;
+
+	// Gather all php comments and functions
+	$contents = file_get_contents($file);
+	preg_match("/\/\*\*.*?\*\//s", $contents, $header);
+	preg_match_all("/\/\*\*(?:(?!\/\*\*).)*?\*\/(\r)?(\n)?(\s)?function\s[^\s\(]+\([^{]*\)?/s", $contents, $comments);
+
+	// Analyze file data
+	$docblock = array();
+	$i = 1;
+	$docblock["description"] = wpdocgen_analyze_description($header[0]);
+	preg_match_all("/ @[a-z]* .*/", $header[0], $meta);
+	foreach ($meta[0] as $data) {
+		$docblock[$i] = wpdocgen_analyze_file_header($data);
+		$i++;
+	}
+
+	// Insert file into database
+	$wpdb->insert($wpdocgen_files, array("name" => basename($file), "description" => $docblock["description"]["short"], "type" => "js"));
+	$file_id = $wpdb->insert_id;
+	if ($docblock["description"]["long"] != "")
+		$wpdb->insert($wpdocgen_section_meta, array("meta_key"=> "long_description", "value" => $docblock["description"]["long"], "for_id" => $file_id, "type" => "file"));
+	reset($docblock);
+	foreach ($docblock as $key => $value) {
+		if ($key != "description") {
+			reset($value);
+			$wpdb->insert($wpdocgen_section_meta, array("meta_key"=> key($value), "value" => $value[key($value)]['primary'], "for_id" => $file_id, "type" => "file"));
+		}
+	}
+
+	for ($i = 0; $i < count($comments[0]); $i++) {
+		// Parse information
+		preg_match("/\/\*\*.*?\*\//s", $comments[0][$i], $comment);
+		$comment = $comment[0];
+		$profile = substr($comments[0][$i], strlen($comment) + 10);
+		$basename = substr($profile, 0, strrpos($profile, "("));
+		$number = ($i+1).".0";
+		$name = $number ." - ". $basename;
+		$docblock = array();
+		$z = 1;
+		$docblock["description"] = wpdocgen_analyze_description($comment);
+		preg_match_all("/ @[a-z]* .*/", $comment, $meta);
+		foreach ($meta[0] as $data) {
+			$docblock[$z] = wpdocgen_analyze_docblock($data);
+			$z++;
+		}
+		// Save it to database
+		$wpdb->insert($wpdocgen_sections, array("name"=> $name, "description" =>$docblock["description"]["short"], "file_id"=>$file_id));
+		$section_id = $wpdb->insert_id;
+		$wpdb->insert($wpdocgen_section_meta, array("meta_key"=> "basename", "value" => $basename, "for_id" => $section_id, "type"=>"section"));
+		$wpdb->insert($wpdocgen_section_meta, array("meta_key"=> "number", "value" => $number, "for_id" => $section_id, "type"=>"section"));
+		$wpdb->insert($wpdocgen_section_meta, array("meta_key"=> "profile", "value" => $profile, "for_id" => $section_id, "type"=>"section"));
+		$wpdb->insert($wpdocgen_section_meta, array("meta_key"=> "long_description", "value" => $docblock["description"]["long"], "section_id" => $section_id));
+		foreach ($docblock as $key => $value) {
+			if ($key != "description") {
+				$wpdb->insert($wpdocgen_section_meta, array("meta_key"=> key($value), "value" => $value[key($value)]['primary'], "for_id" => $section_id, "type" => "section"));
+				$meta_id = $wpdb->insert_id;
+				foreach ($value[key($value)] as $deep_key => $deep_value) {
+					if ($deep_key != "primary" && $deep_value != "")
+						$wpdb->insert($wpdocgen_section_meta, array("meta_key"=> $deep_key, "value" => $deep_value, "for_id" => $meta_id, "type" => "meta"));
+				}
+			}
+		}
+			
+	
+	}
+
+}
+
 /**
  * Analyzes annotations in the header block of a file.
  * 
@@ -238,7 +315,7 @@ function wpdocgen_analyze_file_header($data) {
  * @param  string $comment A php comment in the form of a string.
  * @return array          An array containing both the short and long description.
  */
-function wpdocgen_get_description($comment) {
+function wpdocgen_analyze_description($comment) {
 	$description = trim(preg_replace("/\*/", "", substr($comment, 3, strpos($comment, "@")-3)));
 	$short = (strpos($description, ".") ? substr($description, 0, strpos($description, ".")+1) : $description);
 	$long = trim(substr($description, strlen($short)));
@@ -310,11 +387,47 @@ function wpdocgen_get_toc(){
 	foreach ($subsections as $subsection) {
 		$toc[$subsection->file_id][$subsection->for_id]['parent'] = $subsection->value;
 	}
-	header('Content-type: application/json');
-	echo json_encode($toc);
-	die();
+	if ($_GET['format'] == "json") {
+		header('Content-type: application/json');
+		echo json_encode($toc);
+		die();
+	}
+	else {
+		$url = $_SERVER['REQUEST_URI'];
+		$response = '<h2 id="wpdocgen-page-name">Table of Contents</h2><ul id="wpdocgen-toc">';
+		$css = '<li id="wpdocgen-toc-css"><h3>CSS</h3><ul>';
+		$php = '<li id="wpdocgen-toc-php"><h3>PHP</h3><ul>';
+		$js = '<li id="wpdocgen-toc-js"><h3>JS</h3><ul>';
+		foreach ($toc as $file_id => $file) {
+			$file_li = '<li><a href="'.$url.'&file='.$file_id.'" ><h3>'.$file['name'].'</h3></a><ul>';
+			foreach ($file as $section_id => $section) {
+				if (isset($section['name'])) {
+					$file_li .= '<li><a href="'.$url.'&section='.$section_id.'" ><h4>'.$section['name'].'</h4></a></li>';
+				}
+			}
+			$file_li .= '</ul></li>';
+			switch ($file['type']) {
+				case "css":
+					$css .= $file_li; 
+					break;
+				case "php":
+					$php .= $file_li;
+					break;
+				case "js":
+					$js .= $file_li;
+					break;
+			}
+		}
+		$end = '</ul></li>';
+		$css .= $end;
+		$php .= $end;
+		$js .= $end;
+		$response .= $css . $php . $js . '</ul>';
+		echo $response;
+	}
 }
 add_action("wp_ajax_wpdocgen_get_toc", "wpdocgen_get_toc");
+add_action("wp_ajax_nopriv_wpdocgen_get_toc", "wpdocgen_get_toc");
 
 /**
  * Retrieves a file from the database and responds in JSON. 
@@ -328,7 +441,7 @@ function wpdocgen_get_file() {
 	global $wpdocgen_section_meta;
 
 	// Grab file and sections
-	$file_id = intval($_POST['file']);
+	$file_id = intval($_GET['file']);
 	$file = $wpdb->get_row("SELECT * FROM $wpdocgen_files WHERE id = $file_id");
 	$sections = $wpdb->get_results("SELECT * FROM $wpdocgen_sections WHERE file_id = $file_id");
 	$file_meta = $wpdb->get_results("SELECT * FROM $wpdocgen_section_meta WHERE type='file' AND for_id=".$file->id);
@@ -337,6 +450,7 @@ function wpdocgen_get_file() {
 	$file_array = array();
 	$file_array["name"] = $file->name;
 	$file_array["description"] = $file->description;
+	$file_array["type"] = $file->type;
 
 	// Put file meta in the array
 	foreach ($file_meta as $fm) {
@@ -350,18 +464,133 @@ function wpdocgen_get_file() {
 		foreach ($section_meta as $sm) {
 			$file_array[$section->id][$sm->id]["key"] = $sm->meta_key;
 			$file_array[$section->id][$sm->id]["value"] = $sm->value;
-			$meta_meta = $wpdb->get_results("SELECT * FROM $wpdocgen_section_meta WHERE type='meta' AND for_id=".intval($sm->id));
-			foreach ($meta_meta as $mm) {
-				$file_array[$section->id][$sm->id][$mm->meta_key] = $mm->value;			
+		}
+	}
+	if ($_GET['format'] == 'json') {
+		header('Content-type: application/json');
+		echo json_encode($file_array);
+		die();
+	}
+	else {
+		$url = $_SERVER['REQUEST_URI'];
+		$url = preg_replace("/&file=[0-9]*/", "", $url);
+		$url = preg_replace("/&section=[0-9]*/", "", $url);
+		$result = "<h2 id='wpdocgen-page-name'>".$file_array["name"]."</h2>";
+		$result .= 	"<p>".$file_array["description"]."</p>";
+		$table .= "<table><tr><th>Section</th><th>Description</th></tr>";
+		$sections = "";
+		foreach ($file_array as $section_id => $section) {
+			if (isset($section["name"])) {
+				$table_row = "<tr>";
+				$basename ="";
+				foreach ($section as $meta) {
+					if (isset($meta["key"])) {
+						if ($meta["key"] == "basename") {
+							$basename = "<td><a href='".$url."&section=$section_id' >".$meta["value"]."</a></td>";
+						}
+					}
+				}
+				$table_row .= $basename . "<td>" . $section["description"] . "</td></tr>";
+				$table .= $table_row;
+
 			}
+		}
+		$table .= "</table>";
+		$result .= $table;
+		echo $result;
+	}
+	
+}
+add_action("wp_ajax_wpdocgen_get_file", "wpdocgen_get_file");
+add_action("wp_ajax_nopriv_wpdocgen_get_file", "wpdocgen_get_file");
+
+function wpdocgen_get_section() {
+	global $wpdb;
+	global $wpdocgen_files;
+	global $wpdocgen_sections;
+	global $wpdocgen_section_meta;
+
+	$section_id = intval($_GET['section']);
+	$section = $wpdb->get_row("SELECT * FROM $wpdocgen_sections WHERE id = $section_id");
+	$meta = $wpdb->get_results("SELECT * FROM $wpdocgen_section_meta WHERE type='section' AND for_id = $section_id");
+	$file = $wpdb->get_row("SELECT * FROM $wpdocgen_files WHERE id=".$section->file_id);
+
+	$section_array = array();
+	$section_array['name'] = $section->name;
+	$section_array['type'] = $file->type;
+	$section_array['file'] = $file->name;
+	$section_array['file_id'] = $file->id;
+	$section_array['description'] = $section->description;
+	foreach ($meta as $m) {
+		$section_array[$m->id]["key"] = $m->meta_key;
+		$section_array[$m->id]["value"] = $m->value;
+		$meta_meta = $wpdb->get_results("SELECT * FROM $wpdocgen_section_meta WHERE type='meta' AND for_id=".intval($m->id));
+		foreach ($meta_meta as $mm) {
+			$section_array[$m->id][$mm->meta_key] = $mm->value;			
 		}
 	}
 
-	header('Content-type: application/json');
-	echo json_encode($file_array);
-	die();
+	if ($_GET['format'] == "json") {
+		header('Content-type: application/json');
+		echo json_encode($section_array);
+		die();
+	}
+	else {
+		$url = $_SERVER['REQUEST_URI'];
+		$url = preg_replace("/&file=[0-9]*/", "", $url);
+		$url = preg_replace("/&section=[0-9]*/", "", $url);
+		$result = "<h2 id='wpdocgen-page-name'>".$section_array['name']."</h2>";
+		$result .= "<h3>Descsription</h3><p>".$section_array['description']."</p>";
+		$sourcecode = "<h3>Source Code</h3><p>Located in <a href='$url&file=".$section_array['file_id']."' >".$section_array['file'].".</a></p>";
+		if ($section_array['type'] == 'php') {
+			$profile = "<h3>Profile</h3>";
+			$params = "<h3>Parameters</h3>";
+			$returns = "<h3>Return Value</h3>";
+			$uses = "<h3>Referenced Functions</h3>";
+			$changelog = "<h3>Change Log</h3>";
+			foreach ($section_array as $meta_id => $meta) {
+				if (isset($meta['key'])) {
+					if ($meta['key'] == 'param') {
+						$params .= "<h4>".$meta["value"]."</h4>";
+						$params .= "<p>(".$meta["type"].") ";
+						if (isset($meta["description"])) {
+							$params .= $meta["description"];
+						}
+						$params .="</p>";
+					}
+					elseif ($meta['key'] == 'return') {
+						$returns .= "<p>(".$meta["value"].") ";
+						if (isset($meta["description"])) {
+							$returns .= $meta["description"];
+						}
+						$returns .="</p>";
+					}
+					elseif ($meta['key'] == "uses") {
+						$uses .= "<h4>".$meta["value"]."</h4>";
+						if (isset($meta["description"])) {
+							$uses .= "<p>".$meta["description"]."</p>";
+						}
+					}
+					elseif ($meta['key'] == "since") {
+						$changelog .= "Since ".$meta["value"];
+					}
+					elseif ($meta['key'] == "profile") {
+						$profile .= "<pre>function ".$meta["value"]. "</pre>";
+					}
+				}
+			}
+			$result .= $profile . $params . $returns . $uses . $changelog . $sourcecode;
+			echo $result;
+		}
+		else {
+			$result .= $sourcecode;
+			echo $result;
+		}
+	}
+
 }
-add_action("wp_ajax_wpdocgen_get_file", "wpdocgen_get_file");
+add_action("wp_ajax_wpdocgen_get_section", "wpdocgen_get_section");
+add_action("wp_ajax_nopriv_wpdocgen_get_section", "wpdocgen_get_section");
 
 /**
  * Analyzes entire theme and saves information in database. Generated only when prompted by user.
@@ -403,6 +632,9 @@ function wpdocgen_analyze_theme($directory = null) {
 		if (strpos($file, ".php") && $file != "functions.php") {
 			$php[] = $file;
 		}
+		if (strpos($file, ".js")) {
+			$js[] = $file;
+		}
 	}
 
 	// Analyze the main stylesheet
@@ -420,6 +652,8 @@ function wpdocgen_analyze_theme($directory = null) {
 	foreach ($php as $file) {
 		wpdocgen_analyze_php($directory.$file);
 	}
+
+	wpdocgen_analyze_js($directory."/js/functions.js");
 
 
 }
@@ -441,15 +675,14 @@ function wpdocgen_admin() {
 		wp_die( __( 'You do not have sufficient permissions to access this page.' ) );
 	}
     elseif (isset($_POST['wpdocgen-generate'])) {
-        // wpdocgen_analyze_theme();
-        wpdocgen_print_toc();
+        wpdocgen_analyze_theme();
     }
     else {
     	?>
 	    <div class="wrap">
 	    	<div class="icon32 icon-page"><br></div>
 	    	<h2>WP Documentation Generator
-                <a class="add-new-h2" id="wpdocgen-generate" href="#">Generate Documentation</a>
+                <form method="post"><a class="add-new-h2" id="wpdocgen-generate" href="#"><input type="submit" name="wpdocgen-generate" value="Generate Documentation" /></a></form>
             </h2>
 		</div>
     	
@@ -466,12 +699,13 @@ add_action( 'admin_menu', 'wpdocgen_plugin_menu' );
  * 
  * @return void
  */
-function wpdocgen_process_request() {
+function wpdocgen() {
 	global $wpdocgen_add_script;
 	$wpdocgen_add_script = true;
 	$theme = wp_get_theme();
 	$url = $_SERVER['REQUEST_URI'];
 	$url = preg_replace("/&file=[0-9]*/", "", $url);
+	$url = preg_replace("/&section=[0-9]*/", "", $url);
 	?>
 	<script type="text/javascript">
 			var ajaxurl = '<?php echo admin_url('admin-ajax.php'); ?>';
@@ -484,54 +718,22 @@ function wpdocgen_process_request() {
 		<p class="wpdocgen-meta"><?php echo $theme->get("Description"); ?></p>
 	</div>
 	<div id="wpdocgen-content">
-	<?php if (!isset($_GET['file'])) { ?>
-
+	<?php if (!isset($_GET['file']) && !isset($_GET['section'])) { ?>
 		<script type="text/javascript">
-			var wpdocgen_toc = true;
+			var wpdocgen_pagename = "Table of Contents";
 		</script>
-		<h2>Table of Contents</h2>
-		<ul id="wpdocgen-toc" style="display:none;"\>
-	    	<li id="wpdocgen-toc-css">
-				<h3>CSS</h3>
-	    		<ul id="wpdocgen-toc-css-list" style="display:none;"></ul>
-	    	</li>
-
-	    	<li id="wpdocgen-toc-php">
-				<h3>PHP</h3>
-	    		<ul id="wpdocgen-toc-php-list" style="display:none;"></ul>
-	    	</li>
-
-	    	<li id="wpdocgen-toc-js">
-				<h3>JavaScript</h3>
-	    		<ul id="wpdocgen-toc-js-list" style="display:none;"></ul>
-	    	</li>
-	    </ul>
-		
-	<?php
+		<?php
+		wpdocgen_get_toc();
+	} elseif (isset($_GET['file'])) { 
+		wpdocgen_get_file();
 	} else {
-		wpdocgen_print_file($_GET['file']);
+		wpdocgen_get_section();
 	}
 	?>
 	</div>
 	<?php
 }
-add_shortcode( 'wpdocgen', 'wpdocgen_process_request' );
-
-/**
- * Template for a 'file' page. Loads actual data via an ajax call on the front end.
- * @param  int $file The file id.
- * @return void
- */
-function wpdocgen_print_file($file) {
-	?>
-	<script type="text/javascript">
-			var wpdocgen_toc = false;
-			var wpdocgen_file = <?php echo $file; ?>;
-	</script>
-	<h2 id="wpdocgen-page-name"></h2>
-	<p id="wpdocgen-page-description"></p>
-	<?php
-}
+add_shortcode( 'wpdocgen', 'wpdocgen' );
 
 /**
  * Registers JavaScript file for use on WPDocGen page.
