@@ -28,7 +28,6 @@
 /**
  * TODO:
  *
- * 1. Look deeper directories 
  * 2. Make Table of Contents better.
  * 3. Remove header on non-toc pages
  * 4. Create breadcrumbs.
@@ -592,6 +591,23 @@ function wpdocgen_get_section() {
 add_action("wp_ajax_wpdocgen_get_section", "wpdocgen_get_section");
 add_action("wp_ajax_nopriv_wpdocgen_get_section", "wpdocgen_get_section");
 
+function ListIn($dir, $prefix = '') {
+  $dir = rtrim($dir, '\\/');
+  $result = array();
+
+    foreach (scandir($dir) as $f) {
+      if ($f !== '.' and $f !== '..') {
+        if (is_dir("$dir/$f")) {
+          $result = array_merge($result, ListIn("$dir/$f", "$prefix$f/"));
+        } else {
+          $result[] = $prefix.$f;
+        }
+      }
+    }
+
+  return $result;
+}
+
 /**
  * Analyzes entire theme and saves information in database. Generated only when prompted by user.
  * 
@@ -620,10 +636,13 @@ function wpdocgen_analyze_theme($directory = null) {
 	
 	
 	// Gather all other files and sort them into arrays
-	$files = scandir($directory);
+	$files = ListIn($directory);
 	$css = array();
 	$php = array();
 	$js = array();
+	echo "<pre>";
+	print_r($files);
+	echo "</pre>";
 
 	foreach ($files as $file) {
 		if (strpos($file, ".css") && $file != "style.css") {
@@ -677,17 +696,14 @@ function wpdocgen_admin() {
     elseif (isset($_POST['wpdocgen-generate'])) {
         wpdocgen_analyze_theme();
     }
-    else {
-    	?>
-	    <div class="wrap">
-	    	<div class="icon32 icon-page"><br></div>
-	    	<h2>WP Documentation Generator
-                <form method="post"><a class="add-new-h2" id="wpdocgen-generate" href="#"><input type="submit" name="wpdocgen-generate" value="Generate Documentation" /></a></form>
-            </h2>
-		</div>
-    	
+	?>
+    <div class="wrap">
+    	<div class="icon32 icon-page"><br></div>
+    	<h2>WP Documentation Generator</h2>
+        <form method="post"><input type="submit" name="wpdocgen-generate" value="Generate Documentation" /></form>
+	</div>
     <?php
-    }
+    
     
 }
 add_action( 'admin_menu', 'wpdocgen_plugin_menu' );
