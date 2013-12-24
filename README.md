@@ -11,7 +11,7 @@ WPDocGen is a WordPress plugin that generates documentation for your current Wor
 Usage
 -----
 
-##Basic Usage
+### Basic Usage
 
 Place the shortcode `[wpdocgen]` onto the page where you wish the documentation to display. 
 
@@ -19,7 +19,7 @@ On the first load of this page, all of the files in the current theme directory 
 
 When the WPDocGen is visited, the documentation Table of Contents will be displayed. Clicking links within the Table of Contents navigates to subsections of the documentation by appending arguments to the base URL.
 
-##RESTful Usage
+### RESTful Usage
 
 You can also retrieve information about the theme through a RESTful API call. This is done via the normal WordPress POST to /wp-admin/admin-ajax.php. The way the it is currently configured uses a combination of POST and GET arguments.
 
@@ -35,7 +35,7 @@ You can also retrieve information about the theme through a RESTful API call. Th
 
 *section* (optional) The section ID.
 
-##API Examples
+### API Examples
 
 Here are some examples of retrieving documentation information through the RESTful API. All examples use jQuery.post method for simplicity.
 
