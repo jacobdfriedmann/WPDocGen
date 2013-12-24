@@ -21,13 +21,13 @@ When the WPDocGen is visited, the documentation Table of Contents will be displa
 
 ### RESTful Usage
 
-You can also retrieve information about the theme through a RESTful API call. This is done via the normal WordPress POST to /wp-admin/admin-ajax.php. The way the it is currently configured uses a combination of POST and GET arguments.
+You can also retrieve information about the theme through a RESTful API call. This is done via the normal WordPress POST to /wp-admin/admin-ajax.php. The way the plugin is currently configured uses a combination of POST and GET arguments.
 
-- **POST**
+#### POST
 
 *action* (required) Must be equal to "wpdocgen". This is how WordPress identifies the correct PHP function to call.
 
-- **GET**
+#### GET
 
 *format* (optional) If not included defaults to HTML. Can also be set to "json" to recieve a JSON response.
 
